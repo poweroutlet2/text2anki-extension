@@ -27,39 +27,99 @@ export default function Sidebar({ text }: { text: string }) {
 	const [adding, setAdding] = React.useState(false);
 	const [inputText, setInputText] = React.useState("");
 	const [isOpen, setIsOpen] = React.useState(false);
+	const [deckFetchError, setDeckFetchError] = React.useState("");
+	const [hasApiKey, setHasApiKey] = React.useState<boolean | null>(null);
 
-	const toggleSidebar = () => {
+	const toggleSidebar = async () => {
 		setIsOpen(!isOpen);
+		// Refresh API key check when opening sidebar
+		if (!isOpen) {
+			try {
+				const apiKey = await trpc.getApiKey.query();
+				setHasApiKey(!!apiKey);
+			} catch (error) {
+				console.error("Failed to check API key:", error);
+				setHasApiKey(false);
+			}
+		}
 	};
 
 	React.useEffect(() => {
 		console.log("Adding listener in component");
-		browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+		browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 			if (message.type === "startCardGeneration") {
 				console.log("Selected text:", message.text);
 				setIsOpen(true);
 				setInputText(message.text);
+				// Refresh API key check
+				try {
+					const apiKey = await trpc.getApiKey.query();
+					setHasApiKey(!!apiKey);
+				} catch (error) {
+					console.error("Failed to check API key:", error);
+					setHasApiKey(false);
+				}
 				sendResponse({ success: true });
 			}
 		});
+
+		async function checkApiKey() {
+			try {
+				const apiKey = await trpc.getApiKey.query();
+				setHasApiKey(!!apiKey);
+			} catch (error) {
+				console.error("Failed to check API key:", error);
+				setHasApiKey(false);
+			}
+		}
 
 		async function fetchDecks() {
 			try {
 				const decks = await trpc.fetchDecks.query();
 				setDecks(decks);
 				setDeck(decks[0] || "");
+				setDeckFetchError(""); // Clear any previous error
 			} catch (error) {
 				console.error("Failed to fetch decks:", error);
+				setDeckFetchError("Error connecting to Anki. Is Anki running?");
 			}
 		}
+
+		checkApiKey();
 		fetchDecks();
 	}, []);
 
 	React.useEffect(() => {
-		const handleKeyPress = (event: any) => {
+		const handleKeyPress = async (event: any) => {
 			if (event.altKey && event.key === "a") {
 				event.preventDefault();
-				toggleSidebar();
+
+				// Check if there's selected text
+				const selectedText = window.getSelection()?.toString();
+
+				if (selectedText && selectedText.trim()) {
+					console.log("ALT+A pressed with selected text:", `"${selectedText}"`);
+					// Open sidebar and set the input text
+					setIsOpen(true);
+					setInputText(selectedText.trim());
+					// Reset any previous card data to start fresh
+					setCardData(null);
+					setEditableFront("");
+					setEditableBack("");
+					setGenerateError("");
+					// Refresh API key check
+					try {
+						const apiKey = await trpc.getApiKey.query();
+						setHasApiKey(!!apiKey);
+					} catch (error) {
+						console.error("Failed to check API key:", error);
+						setHasApiKey(false);
+					}
+				} else {
+					console.log("ALT+A pressed but no text selected, toggling sidebar");
+					// No selected text, just toggle the sidebar
+					toggleSidebar();
+				}
 			}
 		};
 
@@ -70,11 +130,18 @@ export default function Sidebar({ text }: { text: string }) {
 	}, [isOpen]);
 
 	const generateCard = async () => {
-		if (inputText == "") return;
+		console.log("Generate card clicked, inputText:", `"${inputText}"`);
+		console.log("Input text length:", inputText.length);
+
+		// Improved validation to handle whitespace and empty strings
+		if (!inputText || inputText.trim() === "") {
+			console.log("Input text is empty or only whitespace, returning early");
+			return;
+		}
 
 		setLoading(true);
 		try {
-			const result = await trpc.generateCard.query({ text: inputText });
+			const result = await trpc.generateCard.query({ text: inputText.trim() });
 			setCardData(result);
 			setEditableFront(result.front);
 			setEditableBack(result.back);
@@ -140,9 +207,35 @@ export default function Sidebar({ text }: { text: string }) {
 
 				{/* Sidebar Content */}
 				<div className="p-4 max-h-[calc(100vh-8rem)] overflow-y-auto">
+					{/* API Key Error Message */}
+					{hasApiKey === false && (
+						<div className="mb-4 p-3 bg-red-950/50 border border-red-500/50 rounded-lg">
+							<div className="flex items-start gap-2">
+								<div className="text-red-400 flex-shrink-0 mt-0.5">
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+										<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+									</svg>
+								</div>
+								<div className="text-red-300">
+									<div className="font-medium text-sm">API Key Required</div>
+									<div className="text-xs mt-1 text-red-200/80">
+										Please click the extension icon in your browser's top-right corner to set up
+										your Google API key.
+									</div>
+								</div>
+							</div>
+						</div>
+					)}
 					<Label className="block">
 						<span className="block text-sm font-medium mb-1">Input Text:</span>
-						<Input value={inputText} onChange={(e) => setInputText(e.target.value)} placeholder="" />
+						<Textarea
+							value={inputText}
+							onChange={(e) => {
+								console.log("Input changed, new value:", `"${e.target.value}"`);
+								setInputText(e.target.value);
+							}}
+							placeholder=""
+						/>
 					</Label>
 
 					{loading ? (
@@ -189,6 +282,8 @@ export default function Sidebar({ text }: { text: string }) {
 							/>
 						</Label>
 
+						{deckFetchError && <div className="text-red-500 text-sm">{deckFetchError}</div>}
+
 						<Label className="block">
 							<span className="block text-sm font-medium mb-1">Tags:</span>
 							<Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="tag1, tag2" />
@@ -196,7 +291,14 @@ export default function Sidebar({ text }: { text: string }) {
 					</div>
 
 					<div className="flex gap-2 mt-4">
-						<Button onClick={generateCard} disabled={loading} variant="default">
+						<Button
+							onClick={() => {
+								console.log("Generate button clicked!");
+								generateCard();
+							}}
+							disabled={loading || hasApiKey === false}
+							variant="default"
+						>
 							{loading ? "Generating..." : "Generate"}
 						</Button>
 						<Button
