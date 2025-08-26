@@ -29,6 +29,40 @@ export default function Sidebar({ text }: { text: string }) {
 	const [isOpen, setIsOpen] = React.useState(false);
 	const [deckFetchError, setDeckFetchError] = React.useState("");
 	const [hasApiKey, setHasApiKey] = React.useState<boolean | null>(null);
+	const [isInitialLoad, setIsInitialLoad] = React.useState(true);
+
+	// Save deck to storage when it changes
+	React.useEffect(() => {
+		if (deck && !isInitialLoad) {
+			browser.storage.local.set({ lastSelectedDeck: deck });
+		}
+	}, [deck, isInitialLoad]);
+
+	// Save tags to storage when they change (but not during initial load)
+	React.useEffect(() => {
+		if (!isInitialLoad) {
+			browser.storage.local.set({ lastSelectedTags: tags });
+		}
+	}, [tags, isInitialLoad]);
+
+	// Load saved values from storage on mount
+	React.useEffect(() => {
+		const loadSavedValues = async () => {
+			try {
+				const result = await browser.storage.local.get(["lastSelectedDeck", "lastSelectedTags"]);
+				if (result.lastSelectedTags) {
+					setTags(result.lastSelectedTags);
+				}
+				// Note: We'll set the deck after fetching available decks to ensure it's valid
+			} catch (error) {
+				console.error("Failed to load saved values:", error);
+			} finally {
+				// Allow saving to storage after initial load is complete
+				setIsInitialLoad(false);
+			}
+		};
+		loadSavedValues();
+	}, []);
 
 	const toggleSidebar = async () => {
 		setIsOpen(!isOpen);
@@ -77,7 +111,22 @@ export default function Sidebar({ text }: { text: string }) {
 			try {
 				const decks = await trpc.fetchDecks.query();
 				setDecks(decks);
-				setDeck(decks[0] || "");
+
+				// Try to restore saved deck, otherwise use first available deck
+				try {
+					const result = await browser.storage.local.get(["lastSelectedDeck"]);
+					const savedDeck = result.lastSelectedDeck;
+
+					if (savedDeck && decks.includes(savedDeck)) {
+						setDeck(savedDeck);
+					} else {
+						setDeck(decks[0] || "");
+					}
+				} catch (storageError) {
+					console.error("Failed to load saved deck:", storageError);
+					setDeck(decks[0] || "");
+				}
+
 				setDeckFetchError(""); // Clear any previous error
 			} catch (error) {
 				console.error("Failed to fetch decks:", error);
@@ -235,6 +284,7 @@ export default function Sidebar({ text }: { text: string }) {
 								setInputText(e.target.value);
 							}}
 							placeholder=""
+							className="h-24 resize-none"
 						/>
 					</Label>
 
@@ -256,6 +306,7 @@ export default function Sidebar({ text }: { text: string }) {
 								value={editableFront}
 								onChange={(e) => setEditableFront(e.target.value)}
 								placeholder="Front of the card"
+								className="h-24 resize-none"
 							/>
 						</Label>
 					</div>
@@ -266,6 +317,7 @@ export default function Sidebar({ text }: { text: string }) {
 								value={editableBack}
 								onChange={(e) => setEditableBack(e.target.value)}
 								placeholder="Back of the card"
+								className="h-24 resize-none"
 							/>
 						</Label>
 					</div>

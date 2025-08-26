@@ -4,118 +4,138 @@ import { z } from "zod";
 import type { TRPCError } from "@trpc/server";
 import { generateObject, generateText } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { apiKeyStorage } from "@/lib/database";
 
 const t = initTRPC.create({
-    isServer: false,
-    allowOutsideOfServer: true,
+	isServer: false,
+	allowOutsideOfServer: true,
 });
 
 // Google client will be constructed per-request using a stored API key
 
 const flashcardSchema = z.object({
-    front: z.string(),
-    back: z.string(),
+	front: z.string(),
+	back: z.string(),
 });
 
 export const appRouter = t.router({
-    // Persist API key in extension storage
-    getApiKey: t.procedure.query(async () => {
-        const result = await browser.storage.local.get("googleApiKey");
-        return (result?.googleApiKey as string | undefined) ?? null;
-    }),
-    setApiKey: t.procedure.input(z.object({ apiKey: z.string() })).mutation(async ({ input }) => {
-        await browser.storage.local.set({ googleApiKey: input.apiKey });
-        return { success: true } as const;
-    }),
-    fetchDecks: t.procedure.query(async () => {
-        const res = await fetch("http://127.0.0.1:8765", {
-            method: "POST",
-            body: JSON.stringify({ action: "deckNames", version: 6 }),
-        });
-        const { result } = await res.json();
+	// Persist API key in IndexedDB using Dexie
+	getApiKey: t.procedure.query(async () => {
+		try {
+			return await apiKeyStorage.getApiKey();
+		} catch (error) {
+			console.error("Failed to get API key from IndexedDB:", error);
+			return null;
+		}
+	}),
+	setApiKey: t.procedure.input(z.object({ apiKey: z.string() })).mutation(async ({ input }) => {
+		try {
+			await apiKeyStorage.saveApiKey(input.apiKey);
+			return { success: true } as const;
+		} catch (error) {
+			console.error("Failed to save API key to IndexedDB:", error);
+			throw new Error("Failed to save API key");
+		}
+	}),
+	fetchDecks: t.procedure.query(async () => {
+		const res = await fetch("http://127.0.0.1:8765", {
+			method: "POST",
+			body: JSON.stringify({ action: "deckNames", version: 6 }),
+		});
+		const { result } = await res.json();
 
-        return result;
-    }),
-    generateCard: t.procedure.input(z.object({ text: z.string() })).query(async ({ input }) => {
-        const stored = await browser.storage.local.get("googleApiKey");
-        const storedKey = stored?.googleApiKey as string | undefined;
-        const envKey = import.meta.env.WXT_GOOGLE_GENERATIVE_AI_API_KEY as string | undefined;
-        const apiKey = storedKey ?? envKey;
+		return result;
+	}),
+	generateCard: t.procedure.input(z.object({ text: z.string() })).query(async ({ input }) => {
+		let storedKey: string | null = null;
+		try {
+			storedKey = await apiKeyStorage.getApiKey();
+		} catch (error) {
+			console.error("Failed to get API key from IndexedDB:", error);
+		}
 
-        if (!apiKey) {
-            throw new Error("Google API key is not set. Please configure it in the extension popup.");
-        }
+		const envKey = import.meta.env.WXT_GOOGLE_GENERATIVE_AI_API_KEY as string | undefined;
+		const apiKey = storedKey ?? envKey;
 
-        const google = createGoogleGenerativeAI({ apiKey });
+		if (!apiKey) {
+			throw new Error("Google API key is not set. Please configure it in the extension popup.");
+		}
 
-        const { object } = await generateObject({
-            model: google("gemini-2.5-flash"),
-            schema: flashcardSchema,
-            prompt: `
+		const google = createGoogleGenerativeAI({ apiKey });
+
+		const { object } = await generateObject({
+			model: google("gemini-2.5-flash"),
+			schema: flashcardSchema,
+			prompt: `
             Create an Anki flashcard with a front and back:
             Text: """${input.text}"""
         `,
-        });
+		});
 
-        console.log(object);
-        return object;
-    }),
-    addCard: t.procedure
-        .input(
-            z.object({
-                front: z.string(),
-                back: z.string(),
-                deck: z.string(),
-                tags: z.array(z.string()),
-            })
-        )
-        .mutation(async ({ input }) => {
-            await fetch("http://127.0.0.1:8765", {
-                method: "POST",
-                body: JSON.stringify({
-                    action: "addNote",
-                    version: 6,
-                    params: {
-                        note: {
-                            deckName: input.deck,
-                            modelName: "Basic",
-                            fields: { Front: input.front, Back: input.back },
-                            tags: input.tags,
-                        },
-                    },
-                }),
-            });
-            return { success: true };
-        }),
+		console.log(object);
+		return object;
+	}),
+	addCard: t.procedure
+		.input(
+			z.object({
+				front: z.string(),
+				back: z.string(),
+				deck: z.string(),
+				tags: z.array(z.string()),
+			})
+		)
+		.mutation(async ({ input }) => {
+			await fetch("http://127.0.0.1:8765", {
+				method: "POST",
+				body: JSON.stringify({
+					action: "addNote",
+					version: 6,
+					params: {
+						note: {
+							deckName: input.deck,
+							modelName: "Basic",
+							fields: { Front: input.front, Back: input.back },
+							tags: input.tags,
+						},
+					},
+				}),
+			});
+			return { success: true };
+		}),
 });
 
 export type AppRouter = typeof appRouter;
 
 export default defineBackground(() => {
-    console.log("Hello background!", { id: browser.runtime.id });
+	console.log("Hello background!", { id: browser.runtime.id });
 
-    createChromeHandler({
-        router: appRouter,
-        createContext: () => ({}),
-        onError: (opts: { error: TRPCError }) => {
-            console.error("Error:", opts.error);
-        },
-    });
+	// Migrate existing API keys from browser.storage.local to IndexedDB
+	apiKeyStorage.migrateFromBrowserStorage().catch((error) => {
+		console.error("Failed to migrate API key during background script initialization:", error);
+	});
 
-    browser.contextMenus.create({
-        id: "create-anki-card",
-        title: "Create Anki Card",
-        contexts: ["selection"],
-    });
+	createChromeHandler({
+		router: appRouter,
+		createContext: () => ({}),
+		onError: (opts: { error: TRPCError }) => {
+			console.error("Error:", opts.error);
+		},
+	});
 
-    browser.contextMenus.onClicked.addListener(async ({ selectionText }) => {
-        if (selectionText) {
-            console.log(selectionText);
-            // Content will call tRPC directly
-            browser.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                console.log(tabs[0].url);
-                browser.tabs.sendMessage(tabs[0].id!, { type: "startCardGeneration", text: selectionText });
-            });
-        }
-    });
+	browser.contextMenus.create({
+		id: "create-anki-card",
+		title: "Create Anki Card",
+		contexts: ["selection"],
+	});
+
+	browser.contextMenus.onClicked.addListener(async ({ selectionText }) => {
+		if (selectionText) {
+			console.log(selectionText);
+			// Content will call tRPC directly
+			browser.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+				console.log(tabs[0].url);
+				browser.tabs.sendMessage(tabs[0].id!, { type: "startCardGeneration", text: selectionText });
+			});
+		}
+	});
 });
