@@ -2,7 +2,7 @@ import { initTRPC } from "@trpc/server";
 import { createChromeHandler } from "trpc-chrome/adapter";
 import { z } from "zod";
 import type { TRPCError } from "@trpc/server";
-import { generateObject, generateText } from "ai";
+import { generateObject } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { apiKeyStorage } from "@/lib/database";
 

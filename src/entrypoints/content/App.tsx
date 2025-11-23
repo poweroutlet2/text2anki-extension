@@ -317,7 +317,7 @@ export default function Sidebar({ text }: { text: string }) {
 		<>
 			{/* Sidebar Overlay */}
 			<div
-				className={`fixed top-4 right-4 w-[28rem] max-h-[75vh] bg-slate-950 shadow-2xl rounded-xl z-[9998] transform transition-all duration-300 ease-in-out ${isOpen
+				className={`fixed top-4 right-4 w-[28rem] max-h-[calc(100vh-2rem)] bg-slate-950 shadow-2xl rounded-xl z-[9998] transform transition-all duration-150 ease-in-out flex flex-col ${isOpen
 					? "translate-x-0 opacity-100 pointer-events-auto"
 					: "translate-x-full opacity-0 pointer-events-none"
 					}`}
@@ -343,7 +343,7 @@ export default function Sidebar({ text }: { text: string }) {
 				</div>
 
 				{/* Sidebar Content */}
-				<div className="p-4 max-h-[calc(100vh-8rem)] overflow-y-auto">
+				<div className="p-4 flex-1 min-h-0 overflow-y-auto">
 					{/* API Key Error Message */}
 					{hasApiKey === false && (
 						<div className="mb-4 p-3 bg-red-950/50 border border-red-500/50 rounded-lg">
