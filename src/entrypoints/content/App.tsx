@@ -17,6 +17,8 @@ const trpc = createTRPCProxyClient<AppRouter>({
 });
 
 export default function Sidebar({ text }: { text: string }) {
+	console.log("Sidebar component rendered");
+
 	const [cardData, setCardData] = React.useState<{ front: string; back: string } | null>(null);
 	const [editableFront, setEditableFront] = React.useState("");
 	const [editableBack, setEditableBack] = React.useState("");
@@ -32,6 +34,7 @@ export default function Sidebar({ text }: { text: string }) {
 	const [hasApiKey, setHasApiKey] = React.useState<boolean | null>(null);
 	const [isInitialLoad, setIsInitialLoad] = React.useState(true);
 	const [addSuccess, setAddSuccess] = React.useState(false);
+	const [showCombo, setShowCombo] = React.useState(false);
 
 	// Save deck to storage when it changes
 	React.useEffect(() => {
@@ -65,6 +68,17 @@ export default function Sidebar({ text }: { text: string }) {
 		};
 		loadSavedValues();
 	}, []);
+
+	// Reusable check: can we add the card to deck?
+	const canAddCard = React.useMemo(() => {
+		return (
+			isOpen &&
+			!!cardData &&
+			editableFront.trim() !== "" &&
+			editableBack.trim() !== "" &&
+			!adding
+		);
+	}, [isOpen, cardData, editableFront, editableBack, adding]);
 
 	const toggleSidebar = async () => {
 		setIsOpen(!isOpen);
@@ -141,7 +155,13 @@ export default function Sidebar({ text }: { text: string }) {
 	}, []);
 
 	React.useEffect(() => {
+		console.log("Keyboard event listener effect running, isOpen:", isOpen);
+
 		const handleKeyPress = async (event: any) => {
+			// Debug: log all key events
+			console.log("Key pressed:", event.key, "Alt:", event.altKey, "Shift:", event.shiftKey, "Ctrl:", event.ctrlKey);
+
+			// Alt+X to toggle sidebar
 			if (event.altKey && event.key === "x") {
 				event.preventDefault();
 
@@ -172,27 +192,89 @@ export default function Sidebar({ text }: { text: string }) {
 					toggleSidebar();
 				}
 			}
+
+			// Alt+Shift+G to generate card or add to deck (context-aware)
+			if (event.altKey && event.shiftKey && event.key === "G") {
+				event.preventDefault();
+
+				// Priority 1: If card is ready to add (has front/back content), add it
+				// Check conditions directly to avoid stale closure issues
+				console.log("Alt+Shift+G pressed - checking conditions:");
+				console.log("- isOpen:", isOpen);
+				console.log("- cardData:", !!cardData);
+				console.log("- editableFront:", `"${editableFront}"`);
+				console.log("- editableBack:", `"${editableBack}"`);
+				console.log("- !adding:", !adding);
+				console.log("- canAddCard computed:", isOpen && cardData && editableFront.trim() && editableBack.trim() && !adding);
+
+				if (isOpen && cardData && editableFront.trim() && editableBack.trim() && !adding) {
+					console.log("Alt+Shift+G - CONDITIONS MET, calling handleAdd");
+					// Show combo popup
+					setShowCombo(true);
+					setTimeout(() => setShowCombo(false), 2000); // Hide after 2 seconds
+					handleAdd();
+				}
+				// Priority 2: If there's selected text, generate from it
+				else {
+					const selectedText = window.getSelection()?.toString();
+
+					if (selectedText && selectedText.trim()) {
+						console.log("Alt+Shift+G pressed with selected text:", `"${selectedText}"`);
+						// Open sidebar if not already open, populate input, and generate
+						setIsOpen(true);
+						setInputText(selectedText.trim());
+						// Clear any previous card data to start fresh
+						setCardData(null);
+						setEditableFront("");
+						setEditableBack("");
+						setGenerateError("");
+						// Generate immediately with the selected text
+						generateCard(selectedText.trim());
+					}
+					// Priority 3: Generate with existing input
+					else if (isOpen && inputText.trim() && !loading) {
+						console.log("Alt+Shift+G pressed - generating card with existing input");
+						generateCard();
+					} else {
+						console.log("Alt+Shift+G pressed but no valid conditions met");
+					}
+				}
+			}
+
+			// Alt+Shift++ to add card to deck (only when sidebar is open and has card data)
+			if (event.altKey && event.shiftKey && event.key === "=") {
+				// Check conditions directly to avoid stale closure issues
+				if (isOpen && cardData && editableFront.trim() && editableBack.trim() && !adding) {
+					event.preventDefault();
+					console.log("Alt+Shift++ pressed - adding card to deck");
+					handleAdd();
+				}
+			}
 		};
 
-		document.addEventListener("keydown", handleKeyPress);
+		window.addEventListener("keydown", handleKeyPress);
+		console.log("Keyboard event listener attached to window");
+
 		return () => {
-			document.removeEventListener("keydown", handleKeyPress);
+			window.removeEventListener("keydown", handleKeyPress);
+			console.log("Keyboard event listener removed from window");
 		};
-	}, [isOpen]);
+	}, [isOpen, cardData, editableFront, editableBack, adding, inputText, loading]);
 
-	const generateCard = async () => {
-		console.log("Generate card clicked, inputText:", `"${inputText}"`);
-		console.log("Input text length:", inputText.length);
+	const generateCard = async (textOverride?: string) => {
+		const textToUse = textOverride || inputText;
+		console.log("Generate card clicked, textToUse:", `"${textToUse}"`);
+		console.log("Text length:", textToUse.length);
 
 		// Improved validation to handle whitespace and empty strings
-		if (!inputText || inputText.trim() === "") {
+		if (!textToUse || textToUse.trim() === "") {
 			console.log("Input text is empty or only whitespace, returning early");
 			return;
 		}
 
 		setLoading(true);
 		try {
-			const result = await trpc.generateCard.query({ text: inputText.trim() });
+			const result = await trpc.generateCard.query({ text: textToUse.trim() });
 			setCardData(result);
 			setEditableFront(result.front);
 			setEditableBack(result.back);
@@ -241,11 +323,10 @@ export default function Sidebar({ text }: { text: string }) {
 		<>
 			{/* Sidebar Overlay */}
 			<div
-				className={`fixed top-4 right-4 w-96 max-h-[calc(100vh-2rem)] bg-slate-950 shadow-2xl rounded-xl z-[9998] transform transition-all duration-300 ease-in-out ${
-					isOpen
-						? "translate-x-0 opacity-100 pointer-events-auto"
-						: "translate-x-full opacity-0 pointer-events-none"
-				}`}
+				className={`fixed top-4 right-4 w-[28rem] max-h-[75vh] bg-slate-950 shadow-2xl rounded-xl z-[9998] transform transition-all duration-300 ease-in-out ${isOpen
+					? "translate-x-0 opacity-100 pointer-events-auto"
+					: "translate-x-full opacity-0 pointer-events-none"
+					}`}
 			>
 				{/* Sidebar Header */}
 				<div className="flex items-center justify-between p-4 rounded-t-xl">
@@ -394,15 +475,19 @@ export default function Sidebar({ text }: { text: string }) {
 							}}
 							disabled={loading || hasApiKey === false}
 							variant="default"
+							title="Generate card or add to deck (Alt+Shift+G)"
 						>
 							{loading ? "Generating..." : "Generate"}
+							{!loading && <span className="ml-1 text-[10px] opacity-60">(Alt+Shift+G)</span>}
 						</Button>
 						<Button
 							onClick={handleAdd}
-							disabled={adding || !cardData || !editableFront.trim() || !editableBack.trim()}
+							disabled={!canAddCard}
 							variant="default"
+							title="Add card to deck (Alt+Shift++)"
 						>
 							{adding ? "Adding..." : "Add to Deck"}
+							{!adding && <span className="ml-1 text-[10px] opacity-60">(Alt+Shift++)</span>}
 						</Button>
 					</div>
 
@@ -411,7 +496,7 @@ export default function Sidebar({ text }: { text: string }) {
 							<div className="flex items-center gap-2">
 								<div className="text-green-400">
 									<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-										<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+										<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
 									</svg>
 								</div>
 								<div className="text-green-300 text-sm font-medium">
@@ -422,6 +507,20 @@ export default function Sidebar({ text }: { text: string }) {
 					)}
 				</div>
 			</div>
+
+			{/* Combo Popup */}
+			{showCombo && (
+				<div
+					className="fixed top-[25vh] right-[calc(1rem+0rem)] z-[9999] pointer-events-none"
+					style={{
+						animation: "comboPopSidebar 0.6s ease-out forwards",
+					}}
+				>
+					<div className="bg-gradient-to-r from-green-500 to-emerald-500 text-white text-4xl font-bold px-8 py-4 rounded-xl shadow-2xl border-2 border-white/20">
+						COMBO MOVE!!
+					</div>
+				</div>
+			)}
 		</>
 	);
 }

@@ -117,7 +117,50 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@keyframes comboPop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3) rotate(-10deg);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.1) rotate(5deg);
+  }
+
+  70% {
+    transform: translate(-50%, -50%) scale(0.95) rotate(-2deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes comboPopSidebar {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.3) rotate(-10deg);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.1) rotate(5deg);
+  }
+
+  70% {
+    transform: translateX(-50%) scale(0.95) rotate(-2deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(1) rotate(0deg);
   }
 }
