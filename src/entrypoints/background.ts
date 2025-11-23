@@ -92,6 +92,49 @@ export const appRouter = t.router({
 		console.log(object);
 		return object;
 	}),
+	storeMediaFile: t.procedure
+		.input(
+			z.object({
+				filename: z.string(),
+				data: z.string(), // base64 encoded image data
+			})
+		)
+		.mutation(async ({ input }) => {
+			try {
+				const res = await fetch("http://127.0.0.1:8765", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						action: "storeMediaFile",
+						version: 6,
+						params: {
+							filename: input.filename,
+							data: input.data,
+						},
+					}),
+				});
+
+				if (!res.ok) {
+					throw new Error(`AnkiConnect request failed with status ${res.status}: ${res.statusText}`);
+				}
+
+				const data = await res.json();
+
+				if (data.error) {
+					throw new Error(data.error);
+				}
+
+				return { success: true, filename: input.filename };
+			} catch (error) {
+				console.error("Failed to store media file via AnkiConnect:", error);
+				if (error instanceof Error) {
+					throw error;
+				}
+				throw new Error("Unable to store media file in Anki. Please ensure Anki is running and AnkiConnect addon is installed.");
+			}
+		}),
 	addCard: t.procedure
 		.input(
 			z.object({
@@ -99,10 +142,86 @@ export const appRouter = t.router({
 				back: z.string(),
 				deck: z.string(),
 				tags: z.array(z.string()),
+				frontImages: z.array(z.object({
+					id: z.string(),
+					data: z.string(), // base64 encoded image data
+					filename: z.string(),
+				})).optional(),
+				backImages: z.array(z.object({
+					id: z.string(),
+					data: z.string(), // base64 encoded image data
+					filename: z.string(),
+				})).optional(),
 			})
 		)
 		.mutation(async ({ input }) => {
 			try {
+				// Upload front images
+				const frontImageTags: string[] = [];
+				if (input.frontImages && input.frontImages.length > 0) {
+					for (const img of input.frontImages) {
+						try {
+							await fetch("http://127.0.0.1:8765", {
+								method: "POST",
+								headers: {
+									"Content-Type": "application/json",
+								},
+								body: JSON.stringify({
+									action: "storeMediaFile",
+									version: 6,
+									params: {
+										filename: img.filename,
+										data: img.data,
+									},
+								}),
+							});
+							frontImageTags.push(`<img src="${img.filename}" />`);
+						} catch (error) {
+							console.error(`Failed to upload front image ${img.filename}:`, error);
+							// Continue with other images even if one fails
+						}
+					}
+				}
+
+				// Upload back images
+				const backImageTags: string[] = [];
+				if (input.backImages && input.backImages.length > 0) {
+					for (const img of input.backImages) {
+						try {
+							await fetch("http://127.0.0.1:8765", {
+								method: "POST",
+								headers: {
+									"Content-Type": "application/json",
+								},
+								body: JSON.stringify({
+									action: "storeMediaFile",
+									version: 6,
+									params: {
+										filename: img.filename,
+										data: img.data,
+									},
+								}),
+							});
+							backImageTags.push(`<img src="${img.filename}" />`);
+						} catch (error) {
+							console.error(`Failed to upload back image ${img.filename}:`, error);
+							// Continue with other images even if one fails
+						}
+					}
+				}
+
+				// Format front field: text + two newlines + images
+				let frontField = input.front.trim();
+				if (frontImageTags.length > 0) {
+					frontField += "\n\n" + frontImageTags.join("\n");
+				}
+
+				// Format back field: text + two newlines + images
+				let backField = input.back.trim();
+				if (backImageTags.length > 0) {
+					backField += "\n\n" + backImageTags.join("\n");
+				}
+
 				const res = await fetch("http://127.0.0.1:8765", {
 					method: "POST",
 					headers: {
@@ -115,7 +234,7 @@ export const appRouter = t.router({
 							note: {
 								deckName: input.deck,
 								modelName: "Basic",
-								fields: { Front: input.front, Back: input.back },
+								fields: { Front: frontField, Back: backField },
 								tags: input.tags,
 							},
 						},

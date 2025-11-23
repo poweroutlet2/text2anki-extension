@@ -29,6 +29,19 @@ export default function Sidebar({ text }: { text: string }) {
 	const [isInitialLoad, setIsInitialLoad] = React.useState(true);
 	const [showCombo, setShowCombo] = React.useState(false);
 
+	// Image state management
+	type ImageData = {
+		id: string;
+		data: File;
+		preview: string;
+	};
+	const [frontImages, setFrontImages] = React.useState<ImageData[]>([]);
+	const [backImages, setBackImages] = React.useState<ImageData[]>([]);
+
+	// Refs for contentEditable divs
+	const frontEditorRef = React.useRef<HTMLDivElement>(null);
+	const backEditorRef = React.useRef<HTMLDivElement>(null);
+
 	// API Key Query
 	const { data: apiKey, refetch: refetchApiKey } = useQuery({
 		queryKey: ["apiKey"],
@@ -43,6 +56,8 @@ export default function Sidebar({ text }: { text: string }) {
 	const {
 		data: decks = [],
 		error: decksError,
+		refetch: refetchDecks,
+		isFetching: isFetchingDecks,
 	} = useQuery({
 		queryKey: ["decks"],
 		queryFn: async () => {
@@ -109,6 +124,78 @@ export default function Sidebar({ text }: { text: string }) {
 		loadSavedValues();
 	}, []);
 
+	// Cleanup blob URLs on unmount
+	React.useEffect(() => {
+		return () => {
+			frontImages.forEach(img => URL.revokeObjectURL(img.preview));
+			backImages.forEach(img => URL.revokeObjectURL(img.preview));
+		};
+	}, [frontImages, backImages]);
+
+	// Helper function to handle image paste
+	const handleImagePaste = React.useCallback(async (
+		e: React.ClipboardEvent<HTMLDivElement>,
+		isFront: boolean
+	) => {
+		const items = e.clipboardData.items;
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i];
+			if (item.type.indexOf('image') !== -1) {
+				e.preventDefault();
+				const file = item.getAsFile();
+				if (file) {
+					const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+					const preview = URL.createObjectURL(file);
+					const imageData: ImageData = { id, data: file, preview };
+
+					if (isFront) {
+						setFrontImages(prev => [...prev, imageData]);
+					} else {
+						setBackImages(prev => [...prev, imageData]);
+					}
+				}
+			}
+		}
+	}, []);
+
+	// Helper function to remove image
+	const removeImage = React.useCallback((id: string, isFront: boolean) => {
+		if (isFront) {
+			setFrontImages(prev => {
+				const image = prev.find(img => img.id === id);
+				if (image) {
+					URL.revokeObjectURL(image.preview);
+				}
+				return prev.filter(img => img.id !== id);
+			});
+		} else {
+			setBackImages(prev => {
+				const image = prev.find(img => img.id === id);
+				if (image) {
+					URL.revokeObjectURL(image.preview);
+				}
+				return prev.filter(img => img.id !== id);
+			});
+		}
+	}, []);
+
+	// Sync contentEditable content with state - these will be defined after addCardMutation
+	let handleFrontContentChange: (e: React.FormEvent<HTMLDivElement>) => void;
+	let handleBackContentChange: (e: React.FormEvent<HTMLDivElement>) => void;
+
+	// Update contentEditable when state changes (from AI generation)
+	React.useEffect(() => {
+		if (frontEditorRef.current && frontEditorRef.current.textContent !== editableFront) {
+			frontEditorRef.current.textContent = editableFront;
+		}
+	}, [editableFront]);
+
+	React.useEffect(() => {
+		if (backEditorRef.current && backEditorRef.current.textContent !== editableBack) {
+			backEditorRef.current.textContent = editableBack;
+		}
+	}, [editableBack]);
+
 	// Generate Card Mutation
 	const generateCardMutation = useMutation({
 		mutationFn: async (text: string) => {
@@ -122,7 +209,14 @@ export default function Sidebar({ text }: { text: string }) {
 
 	// Add Card Mutation
 	const addCardMutation = useMutation({
-		mutationFn: async (data: { front: string; back: string; deck: string; tags: string[] }) => {
+		mutationFn: async (data: {
+			front: string;
+			back: string;
+			deck: string;
+			tags: string[];
+			frontImages?: Array<{ id: string; data: string; filename: string }>;
+			backImages?: Array<{ id: string; data: string; filename: string }>;
+		}) => {
 			return await trpc.addCard.mutate(data);
 		},
 		onSuccess: () => {
@@ -130,6 +224,11 @@ export default function Sidebar({ text }: { text: string }) {
 			setEditableFront("");
 			setEditableBack("");
 			setInputText("");
+			// Clear images and revoke blob URLs
+			frontImages.forEach(img => URL.revokeObjectURL(img.preview));
+			backImages.forEach(img => URL.revokeObjectURL(img.preview));
+			setFrontImages([]);
+			setBackImages([]);
 			setShowCombo(true);
 			setTimeout(() => setShowCombo(false), 2000); // Hide after 2 seconds
 			// Clear success message after 3 seconds
@@ -138,6 +237,25 @@ export default function Sidebar({ text }: { text: string }) {
 			}, 3000);
 		},
 	});
+
+	// Define content change handlers after mutation is declared
+	handleFrontContentChange = React.useCallback((e: React.FormEvent<HTMLDivElement>) => {
+		const text = e.currentTarget.innerText || e.currentTarget.textContent || "";
+		setEditableFront(text);
+		// Reset mutation error when user edits, allowing retry
+		if (addCardMutation.isError) {
+			addCardMutation.reset();
+		}
+	}, [addCardMutation]);
+
+	handleBackContentChange = React.useCallback((e: React.FormEvent<HTMLDivElement>) => {
+		const text = e.currentTarget.innerText || e.currentTarget.textContent || "";
+		setEditableBack(text);
+		// Reset mutation error when user edits, allowing retry
+		if (addCardMutation.isError) {
+			addCardMutation.reset();
+		}
+	}, [addCardMutation]);
 
 
 	// Reusable check: can we add the card to deck?
@@ -195,6 +313,10 @@ export default function Sidebar({ text }: { text: string }) {
 					// Reset any previous card data to start fresh
 					setEditableFront("");
 					setEditableBack("");
+					frontImages.forEach(img => URL.revokeObjectURL(img.preview));
+					backImages.forEach(img => URL.revokeObjectURL(img.preview));
+					setFrontImages([]);
+					setBackImages([]);
 					generateCardMutation.reset();
 					// Refresh API key check
 					refetchApiKey();
@@ -218,6 +340,10 @@ export default function Sidebar({ text }: { text: string }) {
 					setInputText(selectedText.trim());
 					setEditableFront("");
 					setEditableBack("");
+					frontImages.forEach(img => URL.revokeObjectURL(img.preview));
+					backImages.forEach(img => URL.revokeObjectURL(img.preview));
+					setFrontImages([]);
+					setBackImages([]);
 					addCardMutation.reset();
 					generateCardMutation.reset();
 					generateCardMutation.mutate(selectedText.trim());
@@ -229,6 +355,10 @@ export default function Sidebar({ text }: { text: string }) {
 					setInputText(selectedText.trim());
 					setEditableFront("");
 					setEditableBack("");
+					frontImages.forEach(img => URL.revokeObjectURL(img.preview));
+					backImages.forEach(img => URL.revokeObjectURL(img.preview));
+					setFrontImages([]);
+					setBackImages([]);
 					addCardMutation.reset();
 					generateCardMutation.reset();
 					generateCardMutation.mutate(selectedText.trim());
@@ -236,15 +366,7 @@ export default function Sidebar({ text }: { text: string }) {
 				// Priority 3: If card is ready to add (has front/back content) and no error, add it
 				else if (isOpen && editableFront.trim() && editableBack.trim() && deck.trim() && !addCardMutation.isPending && !addCardMutation.isError) {
 					console.log("Alt+Shift+G - CONDITIONS MET, adding card");
-					addCardMutation.mutate({
-						front: editableFront,
-						back: editableBack,
-						deck,
-						tags: tags
-							.split(",")
-							.map((t) => t.trim())
-							.filter((t) => t),
-					});
+					handleAdd();
 				}
 				// Priority 4: If there's selected text, generate from it
 				else if (selectedText && selectedText.trim()) {
@@ -255,6 +377,10 @@ export default function Sidebar({ text }: { text: string }) {
 					// Clear any previous card data to start fresh
 					setEditableFront("");
 					setEditableBack("");
+					frontImages.forEach(img => URL.revokeObjectURL(img.preview));
+					backImages.forEach(img => URL.revokeObjectURL(img.preview));
+					setFrontImages([]);
+					setBackImages([]);
 					generateCardMutation.reset();
 					// Generate immediately with the selected text
 					generateCardMutation.mutate(selectedText.trim());
@@ -302,7 +428,48 @@ export default function Sidebar({ text }: { text: string }) {
 		generateCardMutation.mutate(textToUse.trim());
 	};
 
-	const handleAdd = () => {
+	// Helper function to convert File to base64
+	const fileToBase64 = (file: File): Promise<string> => {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const result = reader.result as string;
+				// Remove data URL prefix (e.g., "data:image/png;base64,")
+				const base64 = result.split(',')[1];
+				resolve(base64);
+			};
+			reader.onerror = reject;
+			reader.readAsDataURL(file);
+		});
+	};
+
+	// Helper function to generate filename from File
+	const generateFilename = (file: File): string => {
+		const timestamp = Date.now();
+		const random = Math.random().toString(36).substring(2, 9);
+		const extension = file.name.split('.').pop() || 'png';
+		return `text2anki-${timestamp}-${random}.${extension}`;
+	};
+
+	const handleAdd = async () => {
+		// Convert front images to base64
+		const frontImageData = await Promise.all(
+			frontImages.map(async (img) => ({
+				id: img.id,
+				data: await fileToBase64(img.data),
+				filename: generateFilename(img.data),
+			}))
+		);
+
+		// Convert back images to base64
+		const backImageData = await Promise.all(
+			backImages.map(async (img) => ({
+				id: img.id,
+				data: await fileToBase64(img.data),
+				filename: generateFilename(img.data),
+			}))
+		);
+
 		addCardMutation.mutate({
 			front: editableFront,
 			back: editableBack,
@@ -311,6 +478,8 @@ export default function Sidebar({ text }: { text: string }) {
 				.split(",")
 				.map((t) => t.trim())
 				.filter((t) => t),
+			frontImages: frontImageData.length > 0 ? frontImageData : undefined,
+			backImages: backImageData.length > 0 ? backImageData : undefined,
 		});
 	};
 
@@ -391,35 +560,69 @@ export default function Sidebar({ text }: { text: string }) {
 					<div className="my-4">
 						<Label className="block">
 							<span className="block text-sm font-medium mb-1">Front:</span>
-							<Textarea
-								value={editableFront}
-								onChange={(e) => {
-									setEditableFront(e.target.value);
-									// Reset mutation error when user edits, allowing retry
-									if (addCardMutation.isError) {
-										addCardMutation.reset();
-									}
-								}}
-								placeholder="Front of the card"
-								className="h-24 resize-none"
+							<div
+								ref={frontEditorRef}
+								contentEditable
+								onInput={handleFrontContentChange}
+								onPaste={(e) => handleImagePaste(e, true)}
+								className="min-h-[6rem] p-2 border border-input bg-background rounded-md text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 overflow-y-auto resize-none empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
+								style={{ whiteSpace: 'pre-wrap' }}
+								data-placeholder="Front of the card"
 							/>
+							{frontImages.length > 0 && (
+								<div className="mt-2 flex flex-wrap gap-2">
+									{frontImages.map((img) => (
+										<div
+											key={img.id}
+											className="relative group w-16 h-16 rounded border border-gray-600 overflow-hidden cursor-pointer"
+											onClick={() => removeImage(img.id, true)}
+										>
+											<img
+												src={img.preview}
+												alt="Preview"
+												className="w-full h-full object-cover"
+											/>
+											<div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+												<span className="text-white text-xl font-bold">×</span>
+											</div>
+										</div>
+									))}
+								</div>
+							)}
 						</Label>
 					</div>
 					<div className="my-4">
 						<Label className="block">
 							<span className="block text-sm font-medium mb-1">Back:</span>
-							<Textarea
-								value={editableBack}
-								onChange={(e) => {
-									setEditableBack(e.target.value);
-									// Reset mutation error when user edits, allowing retry
-									if (addCardMutation.isError) {
-										addCardMutation.reset();
-									}
-								}}
-								placeholder="Back of the card"
-								className="h-24 resize-none"
+							<div
+								ref={backEditorRef}
+								contentEditable
+								onInput={handleBackContentChange}
+								onPaste={(e) => handleImagePaste(e, false)}
+								className="min-h-[6rem] p-2 border border-input bg-background rounded-md text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 overflow-y-auto resize-none empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
+								style={{ whiteSpace: 'pre-wrap' }}
+								data-placeholder="Back of the card"
 							/>
+							{backImages.length > 0 && (
+								<div className="mt-2 flex flex-wrap gap-2">
+									{backImages.map((img) => (
+										<div
+											key={img.id}
+											className="relative group w-16 h-16 rounded border border-gray-600 overflow-hidden cursor-pointer"
+											onClick={() => removeImage(img.id, false)}
+										>
+											<img
+												src={img.preview}
+												alt="Preview"
+												className="w-full h-full object-cover"
+											/>
+											<div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+												<span className="text-white text-xl font-bold">×</span>
+											</div>
+										</div>
+									))}
+								</div>
+							)}
 						</Label>
 					</div>
 
@@ -436,35 +639,51 @@ export default function Sidebar({ text }: { text: string }) {
 						</Label>
 
 						{deckFetchError && (
-							<div className="text-red-500 text-sm">
-								{deckFetchError}{" "}
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<a
-											href="https://ankiweb.net/shared/info/2055492159"
-											target="_blank"
-											rel="noopener noreferrer"
-											className="text-blue-400 underline hover:text-blue-300"
+							<div className="text-red-500 text-sm space-y-2">
+								<div className="flex items-center gap-2 flex-wrap">
+									<span>{deckFetchError}</span>
+									{isFetchingDecks ? (
+										<span className="text-red-500 text-sm inline-flex items-center gap-1">
+											<Loader2 className="w-3 h-3 animate-spin" />
+											Refetching...
+										</span>
+									) : (
+										<button
+											onClick={() => refetchDecks()}
+											className="text-red-500 text-sm underline hover:text-red-400 cursor-pointer"
 										>
-											Install AnkiConnect
-										</a>
-									</TooltipTrigger>
-									<TooltipContent side="bottom" className="max-w-xs">
-										<div className="text-xs">
-											<p className="font-medium mb-1">How to install AnkiConnect:</p>
-											<ol className="list-decimal list-inside space-y-1">
-												<li>Open Anki</li>
-												<li>Go to Tools → Add-ons → Get Add-ons...</li>
-												<li>Enter code: <code className="bg-gray-700 px-1 rounded">2055492159</code></li>
-												<li>Click OK to install</li>
-												<li>Restart Anki</li>
-											</ol>
-											<p className="mt-2 text-gray-300">
-												AnkiConnect enables browser extensions to communicate with Anki.
-											</p>
-										</div>
-									</TooltipContent>
-								</Tooltip>
+											Retry
+										</button>
+									)}
+									{" "}
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<a
+												href="https://ankiweb.net/shared/info/2055492159"
+												target="_blank"
+												rel="noopener noreferrer"
+												className="text-blue-400 underline hover:text-blue-300"
+											>
+												Install AnkiConnect
+											</a>
+										</TooltipTrigger>
+										<TooltipContent side="bottom" className="max-w-xs">
+											<div className="text-xs">
+												<p className="font-medium mb-1">How to install AnkiConnect:</p>
+												<ol className="list-decimal list-inside space-y-1">
+													<li>Open Anki</li>
+													<li>Go to Tools → Add-ons → Get Add-ons...</li>
+													<li>Enter code: <code className="bg-gray-700 px-1 rounded">2055492159</code></li>
+													<li>Click OK to install</li>
+													<li>Restart Anki</li>
+												</ol>
+												<p className="mt-2 text-gray-300">
+													AnkiConnect enables browser extensions to communicate with Anki.
+												</p>
+											</div>
+										</TooltipContent>
+									</Tooltip>
+								</div>
 							</div>
 						)}
 
