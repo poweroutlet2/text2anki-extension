@@ -2,6 +2,7 @@ import { AppRouter } from "../background";
 import { createTRPCProxyClient } from "@trpc/client";
 import { chromeLink } from "trpc-chrome/link";
 import React from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -19,23 +20,61 @@ const trpc = createTRPCProxyClient<AppRouter>({
 export default function Sidebar({ text }: { text: string }) {
 	console.log("Sidebar component rendered");
 
-	const [cardData, setCardData] = React.useState<{ front: string; back: string } | null>(null);
 	const [editableFront, setEditableFront] = React.useState("");
 	const [editableBack, setEditableBack] = React.useState("");
-	const [loading, setLoading] = React.useState(false);
 	const [deck, setDeck] = React.useState("");
 	const [tags, setTags] = React.useState("");
-	const [decks, setDecks] = React.useState<string[]>([]);
-	const [generateError, setGenerateError] = React.useState("");
-	const [adding, setAdding] = React.useState(false);
 	const [inputText, setInputText] = React.useState("");
 	const [isOpen, setIsOpen] = React.useState(false);
-	const [deckFetchError, setDeckFetchError] = React.useState("");
-	const [hasApiKey, setHasApiKey] = React.useState<boolean | null>(null);
 	const [isInitialLoad, setIsInitialLoad] = React.useState(true);
-	const [addSuccess, setAddSuccess] = React.useState(false);
-	const [addError, setAddError] = React.useState("");
 	const [showCombo, setShowCombo] = React.useState(false);
+
+	// API Key Query
+	const { data: apiKey, refetch: refetchApiKey } = useQuery({
+		queryKey: ["apiKey"],
+		queryFn: async () => {
+			return await trpc.getApiKey.query();
+		},
+		enabled: isOpen, // Only fetch when sidebar is open
+	});
+	const hasApiKey = apiKey !== null && apiKey !== undefined;
+
+	// Decks Query
+	const {
+		data: decks = [],
+		error: decksError,
+	} = useQuery({
+		queryKey: ["decks"],
+		queryFn: async () => {
+			return await trpc.fetchDecks.query();
+		},
+		retry: 1,
+	});
+
+	const deckFetchError = decksError
+		? "Error connecting to Anki. Please ensure Anki is running and the AnkiConnect addon is installed."
+		: "";
+
+	// Auto-select deck after decks are loaded
+	React.useEffect(() => {
+		if (decks.length > 0 && !deck) {
+			// Try to restore saved deck, otherwise use first available deck
+			browser.storage.local
+				.get(["lastSelectedDeck"])
+				.then((result) => {
+					const savedDeck = result.lastSelectedDeck;
+					if (savedDeck && decks.includes(savedDeck)) {
+						setDeck(savedDeck);
+					} else {
+						setDeck(decks[0] || "");
+					}
+				})
+				.catch((storageError) => {
+					console.error("Failed to load saved deck:", storageError);
+					setDeck(decks[0] || "");
+				});
+		}
+	}, [decks, deck]);
 
 	// Save deck to storage when it changes
 	React.useEffect(() => {
@@ -70,6 +109,37 @@ export default function Sidebar({ text }: { text: string }) {
 		loadSavedValues();
 	}, []);
 
+	// Generate Card Mutation
+	const generateCardMutation = useMutation({
+		mutationFn: async (text: string) => {
+			return await trpc.generateCard.query({ text: text.trim() });
+		},
+		onSuccess: (result) => {
+			setEditableFront(result.front);
+			setEditableBack(result.back);
+		},
+	});
+
+	// Add Card Mutation
+	const addCardMutation = useMutation({
+		mutationFn: async (data: { front: string; back: string; deck: string; tags: string[] }) => {
+			return await trpc.addCard.mutate(data);
+		},
+		onSuccess: () => {
+			// Success! Clear the form and show success message
+			setEditableFront("");
+			setEditableBack("");
+			setInputText("");
+			setShowCombo(true);
+			setTimeout(() => setShowCombo(false), 2000); // Hide after 2 seconds
+			// Clear success message after 3 seconds
+			setTimeout(() => {
+				addCardMutation.reset();
+			}, 3000);
+		},
+	});
+
+
 	// Reusable check: can we add the card to deck?
 	const canAddCard = React.useMemo(() => {
 		return (
@@ -77,21 +147,15 @@ export default function Sidebar({ text }: { text: string }) {
 			editableFront.trim() !== "" &&
 			editableBack.trim() !== "" &&
 			deck.trim() !== "" &&
-			!adding
+			!addCardMutation.isPending
 		);
-	}, [isOpen, editableFront, editableBack, deck, adding]);
+	}, [isOpen, editableFront, editableBack, deck, addCardMutation.isPending]);
 
-	const toggleSidebar = async () => {
+	const toggleSidebar = () => {
 		setIsOpen(!isOpen);
-		// Refresh API key check when opening sidebar
+		// Refetch API key when opening sidebar
 		if (!isOpen) {
-			try {
-				const apiKey = await trpc.getApiKey.query();
-				setHasApiKey(!!apiKey);
-			} catch (error) {
-				console.error("Failed to check API key:", error);
-				setHasApiKey(false);
-			}
+			refetchApiKey();
 		}
 	};
 
@@ -102,58 +166,12 @@ export default function Sidebar({ text }: { text: string }) {
 				console.log("Selected text:", message.text);
 				setIsOpen(true);
 				setInputText(message.text);
-				// Refresh API key check
-				try {
-					const apiKey = await trpc.getApiKey.query();
-					setHasApiKey(!!apiKey);
-				} catch (error) {
-					console.error("Failed to check API key:", error);
-					setHasApiKey(false);
-				}
+				// Refetch API key check
+				refetchApiKey();
 				sendResponse({ success: true });
 			}
 		});
-
-		async function checkApiKey() {
-			try {
-				const apiKey = await trpc.getApiKey.query();
-				setHasApiKey(!!apiKey);
-			} catch (error) {
-				console.error("Failed to check API key:", error);
-				setHasApiKey(false);
-			}
-		}
-
-		async function fetchDecks() {
-			try {
-				const decks = await trpc.fetchDecks.query();
-				setDecks(decks);
-
-				// Try to restore saved deck, otherwise use first available deck
-				try {
-					const result = await browser.storage.local.get(["lastSelectedDeck"]);
-					const savedDeck = result.lastSelectedDeck;
-
-					if (savedDeck && decks.includes(savedDeck)) {
-						setDeck(savedDeck);
-					} else {
-						setDeck(decks[0] || "");
-					}
-				} catch (storageError) {
-					console.error("Failed to load saved deck:", storageError);
-					setDeck(decks[0] || "");
-				}
-
-				setDeckFetchError(""); // Clear any previous error
-			} catch (error) {
-				console.error("Failed to fetch decks:", error);
-				setDeckFetchError("Error connecting to Anki. Please ensure Anki is running and the AnkiConnect addon is installed.");
-			}
-		}
-
-		checkApiKey();
-		fetchDecks();
-	}, []);
+	}, [refetchApiKey]);
 
 	React.useEffect(() => {
 		console.log("Keyboard event listener effect running, isOpen:", isOpen);
@@ -175,18 +193,11 @@ export default function Sidebar({ text }: { text: string }) {
 					setIsOpen(true);
 					setInputText(selectedText.trim());
 					// Reset any previous card data to start fresh
-					setCardData(null);
 					setEditableFront("");
 					setEditableBack("");
-					setGenerateError("");
+					generateCardMutation.reset();
 					// Refresh API key check
-					try {
-						const apiKey = await trpc.getApiKey.query();
-						setHasApiKey(!!apiKey);
-					} catch (error) {
-						console.error("Failed to check API key:", error);
-						setHasApiKey(false);
-					}
+					refetchApiKey();
 				} else {
 					console.log("ALT+X pressed but no text selected, toggling sidebar");
 					// No selected text, just toggle the sidebar
@@ -198,46 +209,69 @@ export default function Sidebar({ text }: { text: string }) {
 			if (event.altKey && event.shiftKey && event.key === "G") {
 				event.preventDefault();
 
-				// Priority 1: If card is ready to add (has front/back content), add it
-				// Check conditions directly to avoid stale closure issues
-				if (isOpen && editableFront.trim() && editableBack.trim() && deck.trim() && !adding) {
-					console.log("Alt+Shift+G - CONDITIONS MET, calling handleAdd");
-					// Show combo popup
-					setShowCombo(true);
-					setTimeout(() => setShowCombo(false), 2000); // Hide after 2 seconds
-					handleAdd();
-				}
-				// Priority 2: If there's selected text, generate from it
-				else {
-					const selectedText = window.getSelection()?.toString();
+				const selectedText = window.getSelection()?.toString();
 
-					if (selectedText && selectedText.trim()) {
-						console.log("Alt+Shift+G pressed with selected text:", `"${selectedText}"`);
-						// Open sidebar if not already open, populate input, and generate
-						setIsOpen(true);
-						setInputText(selectedText.trim());
-						// Clear any previous card data to start fresh
-						setCardData(null);
-						setEditableFront("");
-						setEditableBack("");
-						setGenerateError("");
-						// Generate immediately with the selected text
-						generateCard(selectedText.trim());
-					}
-					// Priority 3: Generate with existing input
-					else if (isOpen && inputText.trim() && !loading) {
-						console.log("Alt+Shift+G pressed - generating card with existing input");
-						generateCard();
-					} else {
-						console.log("Alt+Shift+G pressed but no valid conditions met");
-					}
+				// Priority 1: If there's an error adding the card AND there's selected text, regenerate with selected text
+				if (addCardMutation.isError && selectedText && selectedText.trim()) {
+					console.log("Alt+Shift+G pressed with error state and selected text - regenerating:", `"${selectedText}"`);
+					setIsOpen(true);
+					setInputText(selectedText.trim());
+					setEditableFront("");
+					setEditableBack("");
+					addCardMutation.reset();
+					generateCardMutation.reset();
+					generateCardMutation.mutate(selectedText.trim());
+				}
+				// Priority 2: If highlighted text is different from input text, generate from highlighted text
+				else if (selectedText && selectedText.trim() && selectedText.trim() !== inputText.trim()) {
+					console.log("Alt+Shift+G pressed with different selected text - generating:", `"${selectedText}"`);
+					setIsOpen(true);
+					setInputText(selectedText.trim());
+					setEditableFront("");
+					setEditableBack("");
+					addCardMutation.reset();
+					generateCardMutation.reset();
+					generateCardMutation.mutate(selectedText.trim());
+				}
+				// Priority 3: If card is ready to add (has front/back content) and no error, add it
+				else if (isOpen && editableFront.trim() && editableBack.trim() && deck.trim() && !addCardMutation.isPending && !addCardMutation.isError) {
+					console.log("Alt+Shift+G - CONDITIONS MET, adding card");
+					addCardMutation.mutate({
+						front: editableFront,
+						back: editableBack,
+						deck,
+						tags: tags
+							.split(",")
+							.map((t) => t.trim())
+							.filter((t) => t),
+					});
+				}
+				// Priority 4: If there's selected text, generate from it
+				else if (selectedText && selectedText.trim()) {
+					console.log("Alt+Shift+G pressed with selected text:", `"${selectedText}"`);
+					// Open sidebar if not already open, populate input, and generate
+					setIsOpen(true);
+					setInputText(selectedText.trim());
+					// Clear any previous card data to start fresh
+					setEditableFront("");
+					setEditableBack("");
+					generateCardMutation.reset();
+					// Generate immediately with the selected text
+					generateCardMutation.mutate(selectedText.trim());
+				}
+				// Priority 5: Generate with existing input
+				else if (isOpen && inputText.trim() && !generateCardMutation.isPending) {
+					console.log("Alt+Shift+G pressed - generating card with existing input");
+					generateCardMutation.mutate(inputText.trim());
+				} else {
+					console.log("Alt+Shift+G pressed but no valid conditions met");
 				}
 			}
 
 			// Alt+Shift++ to add card to deck (only when sidebar is open and has card data)
 			if (event.altKey && event.shiftKey && event.key === "=") {
 				// Check conditions directly to avoid stale closure issues
-				if (isOpen && editableFront.trim() && editableBack.trim() && deck.trim() && !adding) {
+				if (isOpen && editableFront.trim() && editableBack.trim() && deck.trim() && !addCardMutation.isPending) {
 					event.preventDefault();
 					console.log("Alt+Shift++ pressed - adding card to deck");
 					handleAdd();
@@ -252,10 +286,10 @@ export default function Sidebar({ text }: { text: string }) {
 			window.removeEventListener("keydown", handleKeyPress);
 			console.log("Keyboard event listener removed from window");
 		};
-	}, [isOpen, cardData, editableFront, editableBack, adding, inputText, loading]);
+	}, [isOpen, editableFront, editableBack, deck, tags, addCardMutation.isPending, addCardMutation.isError, addCardMutation, inputText, generateCardMutation.isPending, generateCardMutation, refetchApiKey]);
 
-	const generateCard = async (textOverride?: string) => {
-		const textToUse = textOverride || inputText;
+	const generateCard = () => {
+		const textToUse = inputText;
 		console.log("Generate card clicked, textToUse:", `"${textToUse}"`);
 		console.log("Text length:", textToUse.length);
 
@@ -265,52 +299,19 @@ export default function Sidebar({ text }: { text: string }) {
 			return;
 		}
 
-		setLoading(true);
-		try {
-			const result = await trpc.generateCard.query({ text: textToUse.trim() });
-			setCardData(result);
-			setEditableFront(result.front);
-			setEditableBack(result.back);
-			setGenerateError("");
-		} catch (error) {
-			console.error("Failed to generate card:", error);
-			setGenerateError("Error generating card! Please contact your boyfriend...");
-		} finally {
-			setLoading(false);
-		}
+		generateCardMutation.mutate(textToUse.trim());
 	};
 
-	const handleAdd = async () => {
-
-		setAdding(true);
-		setAddSuccess(false);
-		setAddError(""); // Clear any previous error
-		try {
-			await trpc.addCard.mutate({
-				front: editableFront,
-				back: editableBack,
-				deck,
-				tags: tags
-					.split(",")
-					.map((t) => t.trim())
-					.filter((t) => t),
-			});
-
-			// Success! Clear the form and show success message
-			setCardData(null);
-			setEditableFront("");
-			setEditableBack("");
-			setInputText("");
-			setAddSuccess(true);
-
-			// Clear success message after 3 seconds
-			setTimeout(() => setAddSuccess(false), 3000);
-		} catch (error) {
-			console.error("Failed to add card:", error);
-			setAddError("Unable to add card. This may happen if there is already a card in the deck with the same front text. Try editing the front text and adding again.");
-		} finally {
-			setAdding(false);
-		}
+	const handleAdd = () => {
+		addCardMutation.mutate({
+			front: editableFront,
+			back: editableBack,
+			deck,
+			tags: tags
+				.split(",")
+				.map((t) => t.trim())
+				.filter((t) => t),
+		});
 	};
 
 	return (
@@ -345,7 +346,7 @@ export default function Sidebar({ text }: { text: string }) {
 				{/* Sidebar Content */}
 				<div className="p-4 flex-1 min-h-0 overflow-y-auto">
 					{/* API Key Error Message */}
-					{hasApiKey === false && (
+					{!hasApiKey && (
 						<div className="mb-4 p-3 bg-red-950/50 border border-red-500/50 rounded-lg">
 							<div className="flex items-start gap-2">
 								<div className="text-red-400 flex-shrink-0 mt-0.5">
@@ -376,14 +377,14 @@ export default function Sidebar({ text }: { text: string }) {
 						/>
 					</Label>
 
-					{loading ? (
+					{generateCardMutation.isPending ? (
 						<div className="flex flex-row gap-2 mt-2">
 							<Loader2 className="animate-spin" /> Generating card...
 						</div>
-					) : cardData ? (
+					) : generateCardMutation.isSuccess ? (
 						<div className="text-green-500">Generated card successfully</div>
-					) : generateError ? (
-						<div className="text-red-500">Failed to generate card</div>
+					) : generateCardMutation.isError ? (
+						<div className="text-red-500">Error generating card! Please contact your boyfriend...</div>
 					) : (
 						<></>
 					)}
@@ -392,7 +393,13 @@ export default function Sidebar({ text }: { text: string }) {
 							<span className="block text-sm font-medium mb-1">Front:</span>
 							<Textarea
 								value={editableFront}
-								onChange={(e) => setEditableFront(e.target.value)}
+								onChange={(e) => {
+									setEditableFront(e.target.value);
+									// Reset mutation error when user edits, allowing retry
+									if (addCardMutation.isError) {
+										addCardMutation.reset();
+									}
+								}}
 								placeholder="Front of the card"
 								className="h-24 resize-none"
 							/>
@@ -403,7 +410,13 @@ export default function Sidebar({ text }: { text: string }) {
 							<span className="block text-sm font-medium mb-1">Back:</span>
 							<Textarea
 								value={editableBack}
-								onChange={(e) => setEditableBack(e.target.value)}
+								onChange={(e) => {
+									setEditableBack(e.target.value);
+									// Reset mutation error when user edits, allowing retry
+									if (addCardMutation.isError) {
+										addCardMutation.reset();
+									}
+								}}
 								placeholder="Back of the card"
 								className="h-24 resize-none"
 							/>
@@ -461,31 +474,40 @@ export default function Sidebar({ text }: { text: string }) {
 						</Label>
 					</div>
 
-					<div className="flex gap-2 mt-4">
+					<div className="flex gap-2 mt-4 justify-center">
 						<Button
 							onClick={() => {
 								console.log("Generate button clicked!");
 								generateCard();
 							}}
-							disabled={loading || hasApiKey === false}
+							disabled={generateCardMutation.isPending || !hasApiKey}
 							variant="default"
 							title="Generate card or add to deck (Alt+Shift+G)"
 						>
-							{loading ? "Generating..." : "Generate"}
-							{!loading && <span className="ml-1 text-[10px] opacity-60">(Alt+Shift+G)</span>}
+							{generateCardMutation.isPending ? "Generating..." : "Generate"}
+							{!generateCardMutation.isPending && <span className="ml-1 text-[10px] opacity-60">(Alt+Shift+G)</span>}
 						</Button>
 						<Button
 							onClick={handleAdd}
 							disabled={!canAddCard}
 							variant="default"
-							title="Add card to deck (Alt+Shift++)"
+							title={canAddCard ? "Add card to deck (Alt+Shift+G)" : "Add card to deck (Alt+Shift++)"}
 						>
-							{adding ? "Adding..." : "Add to Deck"}
-							{!adding && <span className="ml-1 text-[10px] opacity-60">(Alt+Shift++)</span>}
+							{addCardMutation.isPending ? "Adding..." : "Add to Deck"}
+							{!addCardMutation.isPending && (
+								<span
+									className={`ml-1 text-[10px] ${canAddCard
+										? "opacity-100 font-semibold text-cyan-300 drop-shadow-[0_0_4px_rgba(103,232,249,0.6)] animate-pulse"
+										: "opacity-60"
+										}`}
+								>
+									({canAddCard ? "Alt+Shift+G" : "Alt+Shift++"})
+								</span>
+							)}
 						</Button>
 					</div>
 
-					<div className={`mt-4 overflow-hidden transition-all duration-500 ease-in-out ${addSuccess ? 'max-h-20 opacity-100' : 'max-h-0 opacity-0'
+					<div className={`mt-4 overflow-hidden transition-all duration-500 ease-in-out ${addCardMutation.isSuccess ? 'max-h-20 opacity-100' : 'max-h-0 opacity-0'
 						}`}>
 						<div className="p-3 bg-green-950/50 border border-green-500/50 rounded-lg">
 							<div className="flex items-center gap-2">
@@ -502,7 +524,7 @@ export default function Sidebar({ text }: { text: string }) {
 					</div>
 
 					{/* Error Message */}
-					{addError && (
+					{addCardMutation.isError && (
 						<div className="mt-4 p-3 bg-red-950/50 border border-red-500/50 rounded-lg">
 							<div className="flex items-start gap-2">
 								<div className="text-red-400 flex-shrink-0 mt-0.5">
@@ -510,12 +532,43 @@ export default function Sidebar({ text }: { text: string }) {
 										<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
 									</svg>
 								</div>
-								<div className="text-red-300">
+								<div className="flex-1 text-red-300">
 									<div className="font-medium text-sm">Failed to add card</div>
-									<div className="text-xs mt-1 text-red-200/80">
-										{addError}
+									<div className="text-xs mt-1 text-red-200/80 space-y-1">
+										{(() => {
+											const errorMessage = addCardMutation.error instanceof Error
+												? addCardMutation.error.message
+												: "Unable to add card to Anki.";
+											const isDuplicate = errorMessage.toLowerCase().includes("duplicate") ||
+												errorMessage.toLowerCase().includes("already exists");
+
+											return (
+												<>
+													<div>{errorMessage}</div>
+													{isDuplicate && (
+														<div className="mt-2 pt-2 border-t border-red-500/30">
+															<div className="font-medium mb-1">Why this happens:</div>
+															<div>Anki uses the Front field as a unique identifier. A card with the same Front text already exists in this deck, even if the Back is different.</div>
+															<div className="font-medium mt-2 mb-1">How to fix:</div>
+															<div>Edit the Front text to make it unique, then try adding again. The error will clear automatically when you start editing.</div>
+														</div>
+													)}
+												</>
+											);
+										})()}
 									</div>
 								</div>
+								<button
+									onClick={() => addCardMutation.reset()}
+									className="text-red-400 hover:text-red-300 flex-shrink-0 ml-2 transition-colors"
+									aria-label="Dismiss error"
+									title="Dismiss error"
+								>
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+										<line x1="18" y1="6" x2="6" y2="18"></line>
+										<line x1="6" y1="6" x2="18" y2="18"></line>
+									</svg>
+								</button>
 							</div>
 						</div>
 					)}

@@ -129,12 +129,17 @@ export const appRouter = t.router({
 				const data = await res.json();
 
 				if (data.error) {
-					throw new Error(`AnkiConnect error: ${data.error}`);
+					// Preserve the actual AnkiConnect error message
+					throw new Error(data.error);
 				}
 
 				return { success: true };
 			} catch (error) {
 				console.error("Failed to add card to AnkiConnect:", error);
+				// If it's already an Error with a message, preserve it; otherwise use generic message
+				if (error instanceof Error) {
+					throw error;
+				}
 				throw new Error("Unable to add card to Anki. Please ensure Anki is running and AnkiConnect addon is installed.");
 			}
 		}),
@@ -144,11 +149,6 @@ export type AppRouter = typeof appRouter;
 
 export default defineBackground(() => {
 	console.log("Hello background!", { id: browser.runtime.id });
-
-	// Migrate existing API keys from browser.storage.local to IndexedDB
-	apiKeyStorage.migrateFromBrowserStorage().catch((error) => {
-		console.error("Failed to migrate API key during background script initialization:", error);
-	});
 
 	createChromeHandler({
 		router: appRouter,

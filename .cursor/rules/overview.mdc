@@ -1,0 +1,46 @@
+---
+alwaysApply: true
+---
+
+
+# AI Agent Context: text2anki Browser Extension
+
+## Project Overview
+
+**text2anki** is a WXT-based browser extension that enables users to create Anki flashcards directly from highlighted text on any webpage. The extension uses Google Gemini (via Vercel AI SDK) to generate flashcard content and integrates with Anki through the AnkiConnect API.
+# Cursor Rules for Anki Extension
+
+- This repo is a WXT-based browser extension that lets users highlight text in any page, generate an Anki flashcard (front/back) with Google Gemini via the Vercel AI SDK, and save it to a selected deck using Dexie for local storage.
+- Use TypeScript everywhere with strict type checking enabled.
+
+## Project structure & architecture
+
+- Follow WXT conventions: keep separate entrypoints for background, content scripts, and UI (popup/options) and avoid ad‑hoc `chrome.*` calls outside these entrypoints.
+- All cross-context communication (content ⇄ background ⇄ UI) must go through a tRPC router in the background using `trpc-chrome`; do not use raw `runtime.sendMessage` directly.
+- Keep Dexie access centralized (e.g., in the background or a single shared data module) and expose reads/writes via typed tRPC procedures.
+
+## React, UI, and styling
+
+- Use React function components with hooks only; no class components.
+- Prefer shadcn/ui components for all interactive UI and compose them with Tailwind utility classes; avoid custom CSS files unless Tailwind cannot express the style.
+- Keep UI logic (form state, selection state, loading indicators) inside React components and side effects in hooks; avoid global mutable singletons.
+
+## Data, validation, and fetching
+
+- Use Zod schemas as the single source of truth for:
+  - tRPC procedure inputs/outputs.
+  - AI-generated card shapes (front, back, optional metadata).
+- Use TanStack Query for all async data (e.g., fetching decks, creating/updating cards) and invalidate relevant queries after mutations instead of manual state syncing.
+- Infer TypeScript types from Zod and tRPC where possible instead of hand-writing parallel types.
+
+## AI & card workflow
+
+- The content script should:
+  - Read the user’s current text selection and page URL.
+  - Call a tRPC mutation to request card generation; do not call the Vercel AI SDK directly from the content script.
+- The background (or a dedicated AI module) should:
+  - Call the Vercel AI SDK with Google Gemini to generate candidate front/back text.
+  - Validate the AI response with Zod, map it into the Dexie schema, and persist the card.
+- The UI should:
+  - Show a preview of the generated card (front/back) and allow selecting a deck and editing before saving.
+  - Handle loading, error, and retry states explicitly in the UX.

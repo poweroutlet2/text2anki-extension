@@ -1,6 +1,17 @@
 import "../global.css";
 import ReactDOM from "react-dom/client";
+import React from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Sidebar from "./App.tsx";
+
+const queryClient = new QueryClient({
+	defaultOptions: {
+		queries: {
+			staleTime: 1000 * 60 * 5, // 5 minutes
+			retry: 1,
+		},
+	},
+});
 
 export default defineContentScript({
 	matches: ["*://*/*"],
@@ -21,7 +32,13 @@ export default defineContentScript({
 				container.append(wrapper);
 
 				const root = ReactDOM.createRoot(wrapper);
-				root.render(<Sidebar text="Hello" />);
+				root.render(
+					<React.StrictMode>
+						<QueryClientProvider client={queryClient}>
+							<Sidebar text="Hello" />
+						</QueryClientProvider>
+					</React.StrictMode>
+				);
 				return { root, wrapper };
 			},
 			onRemove: (elements) => {

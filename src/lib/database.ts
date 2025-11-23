@@ -134,44 +134,6 @@ export const apiKeyStorage = {
 			return false;
 		}
 	},
-
-	/**
-	 * Migrate API key from browser.storage.local to IndexedDB
-	 * This is useful for existing users who have API keys stored in the old format
-	 */
-	async migrateFromBrowserStorage(): Promise<boolean> {
-		try {
-			await ensureReady();
-			// Check if we already have an API key in IndexedDB
-			const hasExistingKey = await this.hasApiKey();
-			if (hasExistingKey) {
-				console.log("API key already exists in IndexedDB, skipping migration");
-				return false;
-			}
-
-			// Try to get API key from browser.storage.local
-			if (typeof browser !== "undefined" && browser.storage && browser.storage.local) {
-				const result = await browser.storage.local.get("googleApiKey");
-				const oldApiKey = result?.googleApiKey as string | undefined;
-
-				if (oldApiKey) {
-					console.log("Migrating API key from browser.storage.local to IndexedDB");
-					await this.saveApiKey(oldApiKey);
-
-					// Optionally remove from old storage
-					await browser.storage.local.remove("googleApiKey");
-					console.log("Migration completed successfully");
-					return true;
-				}
-			}
-
-			console.log("No API key found in browser.storage.local to migrate");
-			return false;
-		} catch (error) {
-			console.error("Failed to migrate API key:", error);
-			return false;
-		}
-	},
 };
 
 // Export the database instance for advanced usage if needed
