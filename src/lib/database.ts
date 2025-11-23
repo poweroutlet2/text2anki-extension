@@ -45,6 +45,29 @@ db.open().catch((err) => {
 	console.error("Failed to open database:", err);
 });
 
+// Cache the open promise to prevent multiple concurrent open attempts
+let openPromise: Promise<void> | null = null;
+
+/**
+ * Ensure the database is ready before performing operations
+ * This prevents race conditions where operations are attempted before the database is fully opened
+ */
+async function ensureReady(): Promise<void> {
+	if (db.isOpen()) {
+		return;
+	}
+
+	if (!openPromise) {
+		openPromise = db.open().catch((err) => {
+			console.error("Failed to open database:", err);
+			openPromise = null; // Reset on error so we can retry
+			throw err;
+		});
+	}
+
+	await openPromise;
+}
+
 // API key management functions
 export const apiKeyStorage = {
 	/**
@@ -53,6 +76,7 @@ export const apiKeyStorage = {
 	 */
 	async saveApiKey(apiKey: string): Promise<void> {
 		try {
+			await ensureReady();
 			await db.apiKeys.put({ name: "userApiKey", value: apiKey });
 			console.log("API key saved successfully to IndexedDB");
 		} catch (error) {
@@ -67,6 +91,7 @@ export const apiKeyStorage = {
 	 */
 	async getApiKey(): Promise<string | null> {
 		try {
+			await ensureReady();
 			const entry = await db.apiKeys.get("userApiKey");
 			if (entry) {
 				console.log("Retrieved API key from IndexedDB");
@@ -86,6 +111,7 @@ export const apiKeyStorage = {
 	 */
 	async deleteApiKey(): Promise<void> {
 		try {
+			await ensureReady();
 			await db.apiKeys.delete("userApiKey");
 			console.log("API key deleted successfully from IndexedDB");
 		} catch (error) {
@@ -100,6 +126,7 @@ export const apiKeyStorage = {
 	 */
 	async hasApiKey(): Promise<boolean> {
 		try {
+			await ensureReady();
 			const entry = await db.apiKeys.get("userApiKey");
 			return !!entry;
 		} catch (error) {
@@ -114,6 +141,7 @@ export const apiKeyStorage = {
 	 */
 	async migrateFromBrowserStorage(): Promise<boolean> {
 		try {
+			await ensureReady();
 			// Check if we already have an API key in IndexedDB
 			const hasExistingKey = await this.hasApiKey();
 			if (hasExistingKey) {

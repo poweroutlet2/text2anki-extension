@@ -34,6 +34,7 @@ export default function Sidebar({ text }: { text: string }) {
 	const [hasApiKey, setHasApiKey] = React.useState<boolean | null>(null);
 	const [isInitialLoad, setIsInitialLoad] = React.useState(true);
 	const [addSuccess, setAddSuccess] = React.useState(false);
+	const [addError, setAddError] = React.useState("");
 	const [showCombo, setShowCombo] = React.useState(false);
 
 	// Save deck to storage when it changes
@@ -73,12 +74,12 @@ export default function Sidebar({ text }: { text: string }) {
 	const canAddCard = React.useMemo(() => {
 		return (
 			isOpen &&
-			!!cardData &&
 			editableFront.trim() !== "" &&
 			editableBack.trim() !== "" &&
+			deck.trim() !== "" &&
 			!adding
 		);
-	}, [isOpen, cardData, editableFront, editableBack, adding]);
+	}, [isOpen, editableFront, editableBack, deck, adding]);
 
 	const toggleSidebar = async () => {
 		setIsOpen(!isOpen);
@@ -199,15 +200,7 @@ export default function Sidebar({ text }: { text: string }) {
 
 				// Priority 1: If card is ready to add (has front/back content), add it
 				// Check conditions directly to avoid stale closure issues
-				console.log("Alt+Shift+G pressed - checking conditions:");
-				console.log("- isOpen:", isOpen);
-				console.log("- cardData:", !!cardData);
-				console.log("- editableFront:", `"${editableFront}"`);
-				console.log("- editableBack:", `"${editableBack}"`);
-				console.log("- !adding:", !adding);
-				console.log("- canAddCard computed:", isOpen && cardData && editableFront.trim() && editableBack.trim() && !adding);
-
-				if (isOpen && cardData && editableFront.trim() && editableBack.trim() && !adding) {
+				if (isOpen && editableFront.trim() && editableBack.trim() && deck.trim() && !adding) {
 					console.log("Alt+Shift+G - CONDITIONS MET, calling handleAdd");
 					// Show combo popup
 					setShowCombo(true);
@@ -244,7 +237,7 @@ export default function Sidebar({ text }: { text: string }) {
 			// Alt+Shift++ to add card to deck (only when sidebar is open and has card data)
 			if (event.altKey && event.shiftKey && event.key === "=") {
 				// Check conditions directly to avoid stale closure issues
-				if (isOpen && cardData && editableFront.trim() && editableBack.trim() && !adding) {
+				if (isOpen && editableFront.trim() && editableBack.trim() && deck.trim() && !adding) {
 					event.preventDefault();
 					console.log("Alt+Shift++ pressed - adding card to deck");
 					handleAdd();
@@ -288,10 +281,10 @@ export default function Sidebar({ text }: { text: string }) {
 	};
 
 	const handleAdd = async () => {
-		if (!cardData) return;
 
 		setAdding(true);
 		setAddSuccess(false);
+		setAddError(""); // Clear any previous error
 		try {
 			await trpc.addCard.mutate({
 				front: editableFront,
@@ -314,6 +307,7 @@ export default function Sidebar({ text }: { text: string }) {
 			setTimeout(() => setAddSuccess(false), 3000);
 		} catch (error) {
 			console.error("Failed to add card:", error);
+			setAddError("Unable to add card. This may happen if there is already a card in the deck with the same front text. Try editing the front text and adding again.");
 		} finally {
 			setAdding(false);
 		}
@@ -491,8 +485,9 @@ export default function Sidebar({ text }: { text: string }) {
 						</Button>
 					</div>
 
-					{addSuccess && (
-						<div className="mt-4 p-3 bg-green-950/50 border border-green-500/50 rounded-lg">
+					<div className={`mt-4 overflow-hidden transition-all duration-500 ease-in-out ${addSuccess ? 'max-h-20 opacity-100' : 'max-h-0 opacity-0'
+						}`}>
+						<div className="p-3 bg-green-950/50 border border-green-500/50 rounded-lg">
 							<div className="flex items-center gap-2">
 								<div className="text-green-400">
 									<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -504,6 +499,25 @@ export default function Sidebar({ text }: { text: string }) {
 								</div>
 							</div>
 						</div>
+					</div>
+
+					{/* Error Message */}
+					{addError && (
+						<div className="mt-4 p-3 bg-red-950/50 border border-red-500/50 rounded-lg">
+							<div className="flex items-start gap-2">
+								<div className="text-red-400 flex-shrink-0 mt-0.5">
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+										<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+									</svg>
+								</div>
+								<div className="text-red-300">
+									<div className="font-medium text-sm">Failed to add card</div>
+									<div className="text-xs mt-1 text-red-200/80">
+										{addError}
+									</div>
+								</div>
+							</div>
+						</div>
 					)}
 				</div>
 			</div>
@@ -511,7 +525,7 @@ export default function Sidebar({ text }: { text: string }) {
 			{/* Combo Popup */}
 			{showCombo && (
 				<div
-					className="fixed top-[25vh] right-[calc(1rem+0rem)] z-[9999] pointer-events-none"
+					className="fixed top-[25vh] right-[-8vh] z-[9999] pointer-events-none"
 					style={{
 						animation: "comboPopSidebar 0.6s ease-out forwards",
 					}}
