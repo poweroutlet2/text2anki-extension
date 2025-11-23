@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SimpleSelect } from "@/components/ui/simple-select";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const port = browser.runtime.connect();
 const trpc = createTRPCProxyClient<AppRouter>({
@@ -30,6 +31,7 @@ export default function Sidebar({ text }: { text: string }) {
 	const [deckFetchError, setDeckFetchError] = React.useState("");
 	const [hasApiKey, setHasApiKey] = React.useState<boolean | null>(null);
 	const [isInitialLoad, setIsInitialLoad] = React.useState(true);
+	const [addSuccess, setAddSuccess] = React.useState(false);
 
 	// Save deck to storage when it changes
 	React.useEffect(() => {
@@ -130,7 +132,7 @@ export default function Sidebar({ text }: { text: string }) {
 				setDeckFetchError(""); // Clear any previous error
 			} catch (error) {
 				console.error("Failed to fetch decks:", error);
-				setDeckFetchError("Error connecting to Anki. Is Anki running?");
+				setDeckFetchError("Error connecting to Anki. Please ensure Anki is running and the AnkiConnect addon is installed.");
 			}
 		}
 
@@ -140,14 +142,14 @@ export default function Sidebar({ text }: { text: string }) {
 
 	React.useEffect(() => {
 		const handleKeyPress = async (event: any) => {
-			if (event.altKey && event.key === "a") {
+			if (event.altKey && event.key === "x") {
 				event.preventDefault();
 
 				// Check if there's selected text
 				const selectedText = window.getSelection()?.toString();
 
 				if (selectedText && selectedText.trim()) {
-					console.log("ALT+A pressed with selected text:", `"${selectedText}"`);
+					console.log("ALT+X pressed with selected text:", `"${selectedText}"`);
 					// Open sidebar and set the input text
 					setIsOpen(true);
 					setInputText(selectedText.trim());
@@ -165,7 +167,7 @@ export default function Sidebar({ text }: { text: string }) {
 						setHasApiKey(false);
 					}
 				} else {
-					console.log("ALT+A pressed but no text selected, toggling sidebar");
+					console.log("ALT+X pressed but no text selected, toggling sidebar");
 					// No selected text, just toggle the sidebar
 					toggleSidebar();
 				}
@@ -207,6 +209,7 @@ export default function Sidebar({ text }: { text: string }) {
 		if (!cardData) return;
 
 		setAdding(true);
+		setAddSuccess(false);
 		try {
 			await trpc.addCard.mutate({
 				front: editableFront,
@@ -217,6 +220,16 @@ export default function Sidebar({ text }: { text: string }) {
 					.map((t) => t.trim())
 					.filter((t) => t),
 			});
+
+			// Success! Clear the form and show success message
+			setCardData(null);
+			setEditableFront("");
+			setEditableBack("");
+			setInputText("");
+			setAddSuccess(true);
+
+			// Clear success message after 3 seconds
+			setTimeout(() => setAddSuccess(false), 3000);
 		} catch (error) {
 			console.error("Failed to add card:", error);
 		} finally {
@@ -334,7 +347,38 @@ export default function Sidebar({ text }: { text: string }) {
 							/>
 						</Label>
 
-						{deckFetchError && <div className="text-red-500 text-sm">{deckFetchError}</div>}
+						{deckFetchError && (
+							<div className="text-red-500 text-sm">
+								{deckFetchError}{" "}
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<a
+											href="https://ankiweb.net/shared/info/2055492159"
+											target="_blank"
+											rel="noopener noreferrer"
+											className="text-blue-400 underline hover:text-blue-300"
+										>
+											Install AnkiConnect
+										</a>
+									</TooltipTrigger>
+									<TooltipContent side="bottom" className="max-w-xs">
+										<div className="text-xs">
+											<p className="font-medium mb-1">How to install AnkiConnect:</p>
+											<ol className="list-decimal list-inside space-y-1">
+												<li>Open Anki</li>
+												<li>Go to Tools → Add-ons → Get Add-ons...</li>
+												<li>Enter code: <code className="bg-gray-700 px-1 rounded">2055492159</code></li>
+												<li>Click OK to install</li>
+												<li>Restart Anki</li>
+											</ol>
+											<p className="mt-2 text-gray-300">
+												AnkiConnect enables browser extensions to communicate with Anki.
+											</p>
+										</div>
+									</TooltipContent>
+								</Tooltip>
+							</div>
+						)}
 
 						<Label className="block">
 							<span className="block text-sm font-medium mb-1">Tags:</span>
@@ -361,6 +405,21 @@ export default function Sidebar({ text }: { text: string }) {
 							{adding ? "Adding..." : "Add to Deck"}
 						</Button>
 					</div>
+
+					{addSuccess && (
+						<div className="mt-4 p-3 bg-green-950/50 border border-green-500/50 rounded-lg">
+							<div className="flex items-center gap-2">
+								<div className="text-green-400">
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+										<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+									</svg>
+								</div>
+								<div className="text-green-300 text-sm font-medium">
+									Card successfully added to Anki!
+								</div>
+							</div>
+						</div>
+					)}
 				</div>
 			</div>
 		</>

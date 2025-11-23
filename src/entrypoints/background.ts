@@ -38,13 +38,30 @@ export const appRouter = t.router({
 		}
 	}),
 	fetchDecks: t.procedure.query(async () => {
-		const res = await fetch("http://127.0.0.1:8765", {
-			method: "POST",
-			body: JSON.stringify({ action: "deckNames", version: 6 }),
-		});
-		const { result } = await res.json();
+		try {
+			const res = await fetch("http://127.0.0.1:8765", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ action: "deckNames", version: 6 }),
+			});
 
-		return result;
+			if (!res.ok) {
+				throw new Error(`AnkiConnect request failed with status ${res.status}: ${res.statusText}`);
+			}
+
+			const data = await res.json();
+
+			if (data.error) {
+				throw new Error(`AnkiConnect error: ${data.error}`);
+			}
+
+			return data.result;
+		} catch (error) {
+			console.error("Failed to fetch decks from AnkiConnect:", error);
+			throw new Error("Unable to connect to Anki. Please ensure Anki is running and AnkiConnect addon is installed.");
+		}
 	}),
 	generateCard: t.procedure.input(z.object({ text: z.string() })).query(async ({ input }) => {
 		let storedKey: string | null = null;
@@ -85,22 +102,41 @@ export const appRouter = t.router({
 			})
 		)
 		.mutation(async ({ input }) => {
-			await fetch("http://127.0.0.1:8765", {
-				method: "POST",
-				body: JSON.stringify({
-					action: "addNote",
-					version: 6,
-					params: {
-						note: {
-							deckName: input.deck,
-							modelName: "Basic",
-							fields: { Front: input.front, Back: input.back },
-							tags: input.tags,
-						},
+			try {
+				const res = await fetch("http://127.0.0.1:8765", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
 					},
-				}),
-			});
-			return { success: true };
+					body: JSON.stringify({
+						action: "addNote",
+						version: 6,
+						params: {
+							note: {
+								deckName: input.deck,
+								modelName: "Basic",
+								fields: { Front: input.front, Back: input.back },
+								tags: input.tags,
+							},
+						},
+					}),
+				});
+
+				if (!res.ok) {
+					throw new Error(`AnkiConnect request failed with status ${res.status}: ${res.statusText}`);
+				}
+
+				const data = await res.json();
+
+				if (data.error) {
+					throw new Error(`AnkiConnect error: ${data.error}`);
+				}
+
+				return { success: true };
+			} catch (error) {
+				console.error("Failed to add card to AnkiConnect:", error);
+				throw new Error("Unable to add card to Anki. Please ensure Anki is running and AnkiConnect addon is installed.");
+			}
 		}),
 });
 
